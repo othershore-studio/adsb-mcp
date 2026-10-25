@@ -48,6 +48,32 @@ aliases (SEHI / SEAS), and distinct lookup states. Still open:
   (ABX / LCO / LTG / GTI / LAE B763 / B744, a new flight number each trip) and GLG 16xx numbers. A
   per-callsign `usual_route` can never cover them.
 
+### Military / state aircraft and helicopters (2026-10-25)
+
+Seen 24–25 Oct, apparently practice for an event on **27 Oct** (expect more of it that day — a good
+dataset to check the items below against):
+- **FAE (Ecuadorian Air Force) helicopters fly tactical callsigns**, not FAE-xxx: ARPIA (two at once, both
+  squawk 7377: `e847fc` = FAE-1254 H145, and `e847f9` — unregistered, almost certainly another FAE H145 by
+  its address next to FAE's block `e847fc`–`e847ff`), HIERRO21 (FAE-1255 H145), HIERRO22 (`e847f9`).
+  Long low loiters circling over the city centre (up to 43 min, ~9,000–9,500 ft pressure alt).
+- Other FAE: FAE001 = FAE052 Falcon 7X (VIP), FAE-640 B735, FAE1103 Grob G 120TP (85-min training session
+  overhead). AEE472 / AEE473 (`e84946` / `e84947`, unregistered, low) — likely Army aviation. PNE-220
+  King Air 350 (likely national police). US military C-146A (Do 328, serial 11-3016, `ae68b5`, no callsign)
+  SKBO → UIO 24 Oct, out 25 Oct.
+- **Bug found:** the G 120TP's training was recorded as `go_around` with 4 go-arounds — the go-around rule
+  fires on an aircraft working an area.
+
+To build (in this order; check against the 27 Oct data):
+1. **Military / state flag** per pass: readsb's `dbFlags` military bit (not captured today) **plus**
+   `ADSB_MILITARY_PATTERNS` (e.g. `FAE*,AEE*,HIERRO*,ARPIA*`) matched on callsign / registration — the
+   patterns are what catch unregistered airframes on tactical callsigns. Expose in history; filterable.
+2. **Category in history**: `category` (A7 = rotorcraft) is already stored per pass but not shown or
+   groupable — add it to results and `traffic_stats(group_by="category")`, so "helicopters today" is one
+   call. (Military airframes often have no `type`, so category is the reliable heli signal.)
+3. **Loiter / circling detection**: accumulate absolute track change during a pass; ≥ 360° while staying
+   within a small area → outcome `loitering` (patrols, training, survey flights like N355GB). Loitering
+   passes must NOT feed the go-around rule. Needs a test from the G 120TP shape.
+
 ### Route coverage: plan (Daniel, 2026-10-23)
 
 1. **Airframe fallback (local, free — build first):** when a live callsign has no usual route, use the
