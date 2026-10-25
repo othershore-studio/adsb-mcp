@@ -8,7 +8,9 @@ unset is fine — distance/overhead degrade gracefully, and a nearby airport can
 
 from __future__ import annotations
 
+import fnmatch
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,6 +57,12 @@ class Settings:
     airport_aliases: tuple[str, ...] = field(default_factory=lambda: tuple(
         c for c in (x.strip().upper() for x in (os.environ.get("ADSB_AIRPORT_ALIASES") or "").split(","))
         if c.isalnum() and 3 <= len(c) <= 4))
+    # Callsign / registration patterns that mark military / state aircraft (e.g. "FAE*,AEE*,HIERRO*,ARPIA*"):
+    # catches unregistered airframes flying tactical callsigns, which readsb's database flag can't. Applied
+    # when READING (like the airport aliases), so changing the list re-reads history.
+    military_patterns: tuple[str, ...] = field(default_factory=lambda: tuple(
+        p for p in (x.strip().upper() for x in (os.environ.get("ADSB_MILITARY_PATTERNS") or "").split(","))
+        if p and re.fullmatch(r"[A-Z0-9*?\-]+", p)))
     airport_name: str | None = field(default_factory=lambda: (os.environ.get("ADSB_AIRPORT_NAME") or "").strip() or None)
     # The FIDS board (/board, /board.json; streamable-http only). Airport-referenced, so no site PII:
     # open = no bearer needed (wall panels / HA iframes can't send one), token = behind the bearer, off.
@@ -106,6 +114,10 @@ class Settings:
         if self.airport:
             return "airport", self.airport
         return None
+
+    def military_match(self, callsign: str | None, registration: str | None) -> bool:
+        return any(fnmatch.fnmatchcase((v or "").upper(), p)
+                   for p in self.military_patterns for v in (callsign, registration) if v)
 
     @property
     def enrichment_enabled(self) -> bool:

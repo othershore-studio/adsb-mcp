@@ -33,11 +33,15 @@ CREATE TABLE IF NOT EXISTS passes (
     approach_low_agl_ft REAL,              -- lowest height above the field since the approach began
     go_arounds          INTEGER NOT NULL DEFAULT 0,
     landed_at           REAL,              -- seen on the ground at the airport after an approach
-    outcome             TEXT,              -- set on close: arrival | arrival_presumed | go_around | departure | overflight
+    outcome             TEXT,              -- set on close: arrival | arrival_presumed | loitering | go_around | departure | overflight
     open                INTEGER NOT NULL DEFAULT 1,
     origin              TEXT,              -- departure airport (ICAO), from enrichment
     destination         TEXT,              -- arrival airport (ICAO), from enrichment
-    route_source        TEXT               -- who set origin/destination (opensky); NULL = not looked up yet
+    route_source        TEXT,              -- who set origin/destination (opensky); NULL = not looked up yet
+    military            INTEGER NOT NULL DEFAULT 0,  -- readsb's database flag (patterns are applied on read)
+    turn_deg            REAL NOT NULL DEFAULT 0,     -- total heading change during the pass (circling)
+    last_track          REAL,
+    max_dist_km         REAL               -- with min_dist_km: how far the pass ranged (no coordinates kept)
 );
 CREATE INDEX IF NOT EXISTS passes_hex ON passes (hex, first_seen DESC);
 CREATE INDEX IF NOT EXISTS passes_callsign ON passes (callsign, first_seen DESC);
@@ -64,7 +68,9 @@ CREATE TABLE IF NOT EXISTS meta (
 
 
 # Columns added after the first release: CREATE TABLE IF NOT EXISTS won't add them to an existing file.
-MIGRATIONS = {"passes": [("origin", "TEXT"), ("destination", "TEXT"), ("route_source", "TEXT")]}
+MIGRATIONS = {"passes": [("origin", "TEXT"), ("destination", "TEXT"), ("route_source", "TEXT"),
+                         ("military", "INTEGER NOT NULL DEFAULT 0"), ("turn_deg", "REAL NOT NULL DEFAULT 0"),
+                         ("last_track", "REAL"), ("max_dist_km", "REAL")]}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

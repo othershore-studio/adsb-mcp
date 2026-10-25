@@ -42,6 +42,7 @@ uv run pytest                # no network: the feeder is faked
 | `ADSB_AIRPORT_ICAO` / `ADSB_AIRPORT_LAT` / `ADSB_AIRPORT_LON` | — | The nearby airport (e.g. `EGLL`). An approximate, public reference point when the site isn't set. |
 | `ADSB_AIRPORT_ELEV_FT` | — | Field elevation. With the airport position, turns on arrival / go-around / departure tracking. |
 | `ADSB_AIRPORT_ALIASES` | — | Nearby airfields OpenSky reports instead of your airport (e.g. `SEAS,SEHI`), counted as the airport when reading routes. The store keeps OpenSky's codes as received. |
+| `ADSB_MILITARY_PATTERNS` | — | Callsign / registration patterns marking military or state aircraft (e.g. `FAE*,AEE*,HIERRO*,ARPIA*`), on top of readsb's own military flag. Catches unregistered airframes on tactical callsigns. Applied when reading, so it covers history too. |
 | `ADSB_AIRPORT_NAME` | — | Display name for the board header (e.g. `Heathrow`). |
 | `ADSB_BOARD` | `open` | The flight board at `/board`: `open` (no bearer: it carries no site data), `token` (behind the bearer), `off`. |
 | `ADSB_MCP_TOKEN` | — | Bearer required on streamable-http when set. |
@@ -70,6 +71,12 @@ With the airport elevation set, each pass also gets an **outcome**: `arrival` (s
 `arrival_presumed` (lost on approach: coverage usually ends before the runway, so the pass is held open
 `ADSB_ARRIVAL_GRACE_SECONDS`), `go_around`, `departure` or `overflight`, plus a `go_arounds` count. The
 heuristics are simple and documented in [`passes.py`](src/adsb_mcp/passes.py).
+
+A pass that **circles** — heading changes of 360° or more while staying within about 15 km — is recorded
+as `loitering` (patrols, training, survey flights), and its climbs and descents don't count as go-arounds.
+Every pass also carries its ADS-B category (`rotorcraft: true` for helicopters) and a `military` flag
+(readsb's database flag, or a match in `ADSB_MILITARY_PATTERNS`). `traffic_stats` can group by `category`
+and narrow to `only="military"` or `only="rotorcraft"`.
 
 A failed poll never closes a pass, and open passes are written through, so a restart resumes them. An
 aircraft that drops out of coverage briefly (a hold, a turn behind terrain) continues its pass when it

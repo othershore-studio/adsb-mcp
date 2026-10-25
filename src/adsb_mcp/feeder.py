@@ -66,6 +66,8 @@ def normalize(ac: dict[str, Any]) -> dict[str, Any]:
         "rssi_dbfs": _f(ac.get("rssi")),
         "seen_s": _f(ac.get("seen")),
         "seen_pos_s": _f(ac.get("seen_pos")),
+        # readsb dbFlags bit 0 = military (from its aircraft database; misses unregistered airframes).
+        "military": bool(int(ac.get("dbFlags") or 0) & 1),
     }
 
 

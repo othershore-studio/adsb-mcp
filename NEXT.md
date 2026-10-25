@@ -63,6 +63,12 @@ dataset to check the items below against):
 - **Bug found:** the G 120TP's training was recorded as `go_around` with 4 go-arounds — the go-around rule
   fires on an aircraft working an area.
 
+**Built 2026-10-25, ahead of the 27th** (items 1–3 below): readsb's military flag + `ADSB_MILITARY_PATTERNS`,
+category in history + `traffic_stats(group_by="category", only="military"|"rotorcraft")`, and `loitering`
+from accumulated heading change (stops the go-around misfire). After the 27th: check how many passes were
+flagged, whether ARPIA / HIERRO's patrols came out `loitering`, and whether any real arrival with a holding
+pattern was misread (`arrival_presumed` wins over `loitering`, so it shouldn't be).
+
 To build (in this order; check against the 27 Oct data):
 1. **Military / state flag** per pass: readsb's `dbFlags` military bit (not captured today) **plus**
    `ADSB_MILITARY_PATTERNS` (e.g. `FAE*,AEE*,HIERRO*,ARPIA*`) matched on callsign / registration — the

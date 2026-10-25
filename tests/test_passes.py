@@ -290,3 +290,88 @@ def test_high_climbing_overflight_is_not_a_departure(settings):
     tr = Tracker(settings, connect(settings.db_path))
     run(tr, snap(1000, ac("e80023", 20, 16000, 1500)), snap(1300))      # 8,100 ft above the field
     assert rows(settings)[0]["outcome"] == "overflight"
+
+
+# --- circling / loitering, military, category --------------------------------------------------------
+
+def circle(hx, n, t0, centre_km=8, radius_km=3, deg_per_step=30, alts=(8400, 10000), **kw):
+    """n snapshots flying counter-clockwise around a point east of the airport, climbing and descending —
+    the shape of the Grob G 120TP training session that was misread as 4 go-arounds."""
+    snaps = []
+    clat, clon = east_of_airport(centre_km)
+    for i in range(n):
+        th = math.radians(i * deg_per_step)
+        lat = clat + radius_km * math.sin(th) / 111.32
+        lon = clon + radius_km * math.cos(th) / (111.32 * math.cos(math.radians(clat)))
+        down = (i // 3) % 2 == 0                     # 3 snapshots down, 3 up, ...
+        alt = alts[0] + (alts[1] - alts[0]) * ((i % 3) / 2 if not down else 1 - (i % 3) / 2)
+        raw = {"hex": hx, "flight": kw.get("flight", "FAE1103"), "r": kw.get("reg"), "t": kw.get("typ", "G12T"),
+               "alt_baro": int(alt), "baro_rate": -1500 if down else 1500, "gs": 140,
+               "track": (-math.degrees(th)) % 360, "lat": lat, "lon": lon, "seen": 0.5, "seen_pos": 0.5,
+               "category": kw.get("category", "A1"), "dbFlags": kw.get("dbFlags", 0)}
+        snaps.append(snap(t0 + 15 * i, raw))
+    return snaps
+
+
+def test_training_circles_are_loitering_not_go_arounds(settings):
+    tr = Tracker(settings, connect(settings.db_path))
+    run(tr, *circle("e847ff", 30, 1000))             # 2.5 turns
+    run(tr, snap(1000 + 15 * 30 + 200))
+    (r,) = rows(settings)
+    assert r["turn_deg"] >= 720 and r["outcome"] == "loitering" and r["go_arounds"] == 0
+
+
+def test_straight_flight_with_track_jitter_does_not_turn(settings):
+    tr = Tracker(settings, connect(settings.db_path))
+    run(tr, *(snap(1000 + 15 * i, {**ac("e80030", 5 + i, 35000), "gs": 450, "track": 90 + (i % 2)})
+              for i in range(20)))
+    assert rows(settings)[0]["turn_deg"] == 0
+
+
+def test_loitering_without_arrival_tracking(settings, monkeypatch):
+    monkeypatch.delenv("ADSB_AIRPORT_ELEV_FT")
+    s = Settings()
+    tr = Tracker(s, connect(s.db_path))
+    run(tr, *circle("e847f9", 30, 1000, flight="ARPIA", typ=None, category="A7"), snap(1000 + 15 * 30 + 200))
+    assert rows(s)[0]["outcome"] == "loitering"
+
+
+def test_military_flag_patterns_and_category(settings, monkeypatch):
+    monkeypatch.setenv("ADSB_MILITARY_PATTERNS", "fae*, HIERRO*, ARPIA*, bad pattern!")
+    s = Settings()
+    assert s.military_patterns == ("FAE*", "HIERRO*", "ARPIA*")
+    import time
+    t0 = time.time() - 3600                          # inside traffic_stats' window
+    tr = Tracker(s, connect(s.db_path))
+    run(tr, *circle("e847f9", 6, t0, flight="ARPIA", typ=None, category="A7"))                    # pattern
+    run(tr, *circle("ae68b5", 3, t0, flight=None, reg="11-3016", typ="D328", dbFlags=1))          # readsb flag
+    run(tr, snap(t0, ac("e80040", 10, 35000, flight="AAL100")))                                    # neither
+    run(tr, snap(t0 + 1000))
+    d = _call(s, "aircraft_history", {"query": "ARPIA"})["passes"][0]
+    assert d["military"] is True and d["military_basis"] == "pattern" and d["rotorcraft"] is True
+    d = _call(s, "aircraft_history", {"query": "11-3016"})["passes"][0]
+    assert d["military"] is True and d["military_basis"] == "readsb"
+    assert _call(s, "aircraft_history", {"query": "AAL100"})["passes"][0]["military"] is False
+    mil = _call(s, "traffic_stats", {"group_by": "airframe", "only": "military"})
+    assert mil["total_passes"] == 2 and {r["hex"] for r in mil["rows"]} == {"e847f9", "ae68b5"}
+    heli = _call(s, "traffic_stats", {"group_by": "callsign", "only": "rotorcraft"})
+    assert [r["callsign"] for r in heli["rows"]] == ["ARPIA"]
+    cats = {r["category"]: r["passes"] for r in _call(s, "traffic_stats", {"group_by": "category"})["rows"]}
+    assert cats["A7"] == 1
+    assert _call(s, "traffic_stats", {"only": "boats"})["status"] == "refused"
+
+
+def test_live_tools_mark_military(settings, monkeypatch):
+    monkeypatch.setenv("ADSB_MILITARY_PATTERNS", "ARPIA*")
+    raws = [{"hex": "e847f9", "flight": "ARPIA ", "alt_baro": 9100, "lat": -0.18, "lon": -78.48, "seen": 0.1,
+             "seen_pos": 0.2, "category": "A7"},
+            {"hex": "ae68b5", "r": "11-3016", "t": "D328", "alt_baro": 15000, "lat": -0.1, "lon": -78.4,
+             "seen": 0.1, "seen_pos": 0.2, "dbFlags": 1},
+            {"hex": "e80001", "flight": "LNE1454 ", "alt_baro": 30000, "lat": -0.2, "lon": -78.3, "seen": 0.1,
+             "seen_pos": 0.2}]
+    real = httpx.AsyncClient
+    monkeypatch.setattr(feeder_mod.httpx, "AsyncClient", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"now": 1, "aircraft": raws})), **kw))
+    got = {a["hex"]: (a["military"], a.get("military_basis"))
+           for a in _call(Settings(), "aircraft_overhead", {"include_grounded": True})["aircraft"]}
+    assert got == {"e847f9": (True, "pattern"), "ae68b5": (True, "readsb"), "e80001": (False, None)}

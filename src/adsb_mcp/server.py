@@ -54,7 +54,9 @@ Every result has a `status`: "ok", "refused" (caller-fixable input or a tier not
 or "error" (the receiver is unreachable — `kind`+`detail`; not something a reworded query fixes).
 """
 
-GROUP_BY = ("airframe", "callsign", "type", "outcome", "route", "hour")
+GROUP_BY = ("airframe", "callsign", "type", "category", "outcome", "route", "hour")
+ONLY = ("military", "rotorcraft")
+ROTORCRAFT = "A7"            # ADS-B emitter category for helicopters
 
 # "Approximate location" for aircraft_overhead (ADSB_EXACT_LOCATION off): enough for "about 12 km to the
 # south", too coarse for one result to pinpoint the site. 2 decimals ≈ 1.1 km.
@@ -69,6 +71,8 @@ _GROUP_SQL = {
                              "GROUP_CONCAT(DISTINCT type) AS types, MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "type": ("type", "SELECT type, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                      "MIN(first_seen) AS first, MAX(last_seen) AS last"),
+    "category": ("category", "SELECT category, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
+                             "GROUP_CONCAT(DISTINCT type) AS types, MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "outcome": ("outcome", "SELECT outcome, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                            "MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "route": ("route", "SELECT COALESCE({o}, '?') || '-' || COALESCE({d}, '?') AS route, {o} AS origin, "
@@ -123,8 +127,23 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
             return {"kind": "site"}           # the site's coordinates are PII: never echoed
         return {"kind": "airport", "icao": settings.airport_icao}
 
+    def _military(flag: Any, callsign: str | None, registration: str | None) -> dict[str, Any]:
+        if flag:
+            return {"military": True, "military_basis": "readsb"}
+        if settings.military_match(callsign, registration):
+            return {"military": True, "military_basis": "pattern"}
+        return {"military": False}
+
+    def _military_sql() -> str:
+        # Patterns are validated [A-Z0-9*?-] in config, so inlining them as GLOB literals is safe.
+        terms = ["military = 1"] + [f"upper({c}) GLOB '{p}'" for p in settings.military_patterns
+                                     for c in ("callsign", "reg")]
+        return "(" + " OR ".join(terms) + ")"
+
     def _with_routes(acs: list[dict]) -> list[dict]:
-        """Add `usual_route` (learned from enriched past passes) to live aircraft; a no-op without a store."""
+        """Mark military / state aircraft, and add `usual_route` (learned from enriched past passes)."""
+        for a in acs:
+            a.update(_military(a.pop("military", False), a.get("callsign"), a.get("registration")))
         conn = _store()
         if conn is None:
             return acs
@@ -273,7 +292,9 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
                 "max_rssi_dbfs": r["max_rssi"], "points": r["points"], "outcome": r["outcome"],
                 "go_arounds": r["go_arounds"], "landed_at": _local(r["landed_at"]),
                 "emergency": r["emergency"], "in_progress": bool(r["open"]),
-                **_route_fields(r)}
+                "category": r["category"], "rotorcraft": r["category"] == ROTORCRAFT,
+                **_military(r["military"], r["callsign"], r["reg"]),
+                "turn_deg": round(r["turn_deg"] or 0), **_route_fields(r)}
 
     def _route_fields(r: sqlite3.Row) -> dict[str, Any]:
         # Aliases applied for reading; OpenSky's own code kept alongside whenever it differs.
@@ -288,15 +309,17 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
 
     @mcp.tool(title="Traffic stats", annotations=_read_hints("Traffic stats"), structured_output=False)
     async def traffic_stats(group_by: str = "callsign", since_days: float = 30, order: str = "most",
-                            limit: int = 10) -> list[Any]:
+                            limit: int = 10, only: str = "") -> list[Any]:
         """Counts of recorded PASSES (visits) over a window, grouped one way. Answers "most common flights",
         "which aircraft come most / rarest visitors", "what models fly here", "how many landed / went
         around", "busiest hours".
 
         Args:
             group_by: airframe (hex/registration — the physical aircraft), callsign (the route/service),
-                type (the model), outcome (arrival / arrival_presumed / go_around / departure / overflight),
-                route (origin-destination airports, ICAO; needs enrichment), or hour (local hour of day).
+                type (the model), category (ADS-B emitter category; A7 = helicopter), outcome (arrival /
+                arrival_presumed / loitering / go_around / departure / overflight), route (origin-destination
+                airports, ICAO; needs enrichment), or hour (local hour of day).
+            only: "" (all, default), "military" (military / state aircraft) or "rotorcraft" (helicopters).
             since_days: window, in days back from now (default 30).
             order: "most" (default) or "least" — least = the rarest.
             limit: rows returned (default 10, max 100).
@@ -309,14 +332,17 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
             return _refused("since_days out of range", advice="pass a window between 0 and 3650 days")
         if not 1 <= limit <= 100:
             return _refused("limit out of range", advice="pass 1..100")
+        if only and only not in ONLY:
+            return _refused(f"unknown only {only!r}", advice=f'use "", {", ".join(repr(o) for o in ONLY)}')
         conn = _store()
         if conn is None:
             return _not_recording()
         try:
             cutoff = time.time() - since_days * 86400
+            subset = {"": "", "military": f" AND {_military_sql()}", "rotorcraft": f" AND category = '{ROTORCRAFT}'"}[only]
             if group_by == "hour":
                 counts = [0] * 24
-                for (fs,) in conn.execute("SELECT first_seen FROM passes WHERE first_seen >= ?", (cutoff,)):
+                for (fs,) in conn.execute(f"SELECT first_seen FROM passes WHERE first_seen >= ?{subset}", (cutoff,)):
                     counts[datetime.fromtimestamp(fs, tz).hour] += 1
                 sign = -1 if order == "most" else 1
                 rows = sorted(({"hour": h, "passes": n} for h, n in enumerate(counts)),
@@ -329,7 +355,7 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
                             else " AND route_source = 'opensky' AND (origin IS NOT NULL OR destination IS NOT NULL)"
                             if group_by == "route" else f" AND {key} IS NOT NULL")
                 direction = "DESC" if order == "most" else "ASC"
-                cur = conn.execute(f"{select} FROM passes WHERE first_seen >= ?{not_null} GROUP BY {key} "
+                cur = conn.execute(f"{select} FROM passes WHERE first_seen >= ?{subset}{not_null} GROUP BY {key} "
                                    f"ORDER BY passes {direction}, last DESC LIMIT ?", (cutoff, limit))
                 rows = []
                 for r in cur:
@@ -339,10 +365,10 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
                             d[k] = sorted(d[k].split(","))[:10] if d[k] else []
                     d["first_seen"], d["last_seen"] = _local(r["first"]), _local(r["last"])
                     rows.append(d)
-            total = conn.execute("SELECT COUNT(*) AS n, COUNT(DISTINCT hex) AS a FROM passes WHERE first_seen >= ?",
+            total = conn.execute(f"SELECT COUNT(*) AS n, COUNT(DISTINCT hex) AS a FROM passes WHERE first_seen >= ?{subset}",
                                  (cutoff,)).fetchone()
             out = {"status": "ok", "source": "adsb-history", "group_by": group_by, "since_days": since_days,
-                   "order": order, "limit": limit, "tz": tz.key, "total_passes": total["n"],
+                   "order": order, "limit": limit, "only": only or None, "tz": tz.key, "total_passes": total["n"],
                    "total_airframes": total["a"], "rows": rows, "recorder": _recorder(conn)}
             if group_by == "route" and not rows:
                 out["note"] = ("no routes yet: enrichment (ADSB_OPENSKY_CLIENT_ID/SECRET) fills them in the day "

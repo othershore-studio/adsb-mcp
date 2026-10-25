@@ -168,7 +168,7 @@ def test_migration_adds_route_columns_to_an_old_store(tmp_path):
     import sqlite3
 
     from adsb_mcp.store import SCHEMA
-    first_release = re.sub(r",\n    origin .*?\n    route_source[^\n]*\n", "\n", SCHEMA, flags=re.S)
+    first_release = re.sub(r",\n    origin .*?\n\);", "\n);", SCHEMA, count=1, flags=re.S)   # every later column
     assert "origin" not in first_release.split("CREATE INDEX")[0]
     old = sqlite3.connect(tmp_path / "old.db")
     old.executescript(first_release)
@@ -176,7 +176,7 @@ def test_migration_adds_route_columns_to_an_old_store(tmp_path):
     old.commit()
     old.close()
     cols = {r[1] for r in connect(tmp_path / "old.db").execute("PRAGMA table_info(passes)")}
-    assert {"origin", "destination", "route_source"} <= cols
+    assert {"origin", "destination", "route_source", "military", "turn_deg", "last_track", "max_dist_km"} <= cols
 
 
 # --- the routes, surfaced -----------------------------------------------------------------------------

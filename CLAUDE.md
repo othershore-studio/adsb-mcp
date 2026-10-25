@@ -103,6 +103,17 @@ and public). The star query: *"¿qué avión es ese?"*
   min_age_s)`), so N panels cost ~nothing. Responsive via container queries (each panel drops columns by
   its own width) with viewport media queries as the fallback for old tablets. Its arrivals / departures use
   the recorder's heuristics (`passes.airport_frame` / `on_approach` / `climbing_out`) — one definition.
+- **Military / state aircraft = readsb's flag OR operator patterns, applied on read.** readsb's `dbFlags`
+  military bit only knows registered airframes; Ecuador's FAE flies unregistered helicopters on tactical
+  callsigns (ARPIA, HIERRO22 = `e847f9`), so `ADSB_MILITARY_PATTERNS` (validated `[A-Z0-9*?-]`, inlined as
+  SQL GLOB) catches them. The flag is stored per pass (`military`); patterns are evaluated when reading,
+  like the airport aliases, so a new pattern re-reads history. Results say `military_basis` (readsb |
+  pattern).
+- **Loitering is detected from heading change, without storing a track.** A pass accumulates
+  `turn_deg` (sum of track changes ≥ 2°, ignored below 20 kt where a hovering helicopter's track is noise)
+  and ranges `min_dist_km`..`max_dist_km` from the reference — distances only, no coordinates (the
+  PII rule). ≥ 360° within 15 km → `loitering`, which also stops the go-around rule (measured: a Grob
+  G 120TP training session was recorded as 4 go-arounds; the test recreates the shape — 5 under the old rule).
 - **All five: four hints explicit**, **ok/refused/error** contract (receiver unreachable = error, never a
   silent empty list).
 

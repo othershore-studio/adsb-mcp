@@ -18,8 +18,12 @@ The heuristics are deliberately simple and documented here:
                     below 5,000 ft above it, climbing ≥ 300 fpm. (Widened 2026-10-23 from "first sample, 10 km,
                     3,000 ft": the same daily departure, LNE1397, was a departure 3 days and an overflight 4 —
                     terrain hides the takeoff and the receiver first sees it ~20 km out, turning south.)
-Outcome on close: arrival (landed seen) > arrival_presumed (lost on approach) > go_around (went around,
-then left) > departure > overflight. Without arrival tracking the outcome is null.
+  * loitering     : circled — heading changed ≥ 360° in total (`LOITER_TURN_DEG`) while the pass ranged
+                    ≤ 15 km (`LOITER_SPREAD_KM`, from the distances to the reference: no coordinates kept).
+                    Patrols, training, survey flights. Once loitering, climbs and descents no longer count
+                    as go-arounds (a Grob G 120TP's training session was recorded as 4 go-arounds).
+Outcome on close: arrival (landed seen) > arrival_presumed (lost on approach) > loitering > go_around (went
+around, then left) > departure > overflight. Without arrival tracking only `loitering` is set (else null).
 
 Feeder-down is NOT absence: a failed poll touches no pass (see `poll_once`), so an outage never closes or
 splits the passes that were open.
@@ -51,6 +55,10 @@ GA_KM = 15
 DEPARTURE_KM = 25
 DEPARTURE_AGL = 5_000
 DEPARTURE_SAMPLES = 4       # snapshots at the start of a pass in which the departure rule may fire
+LOITER_TURN_DEG = 360
+LOITER_SPREAD_KM = 15
+TURN_MIN_STEP_DEG = 2       # heading jitter below this between snapshots isn't a turn
+TURN_MIN_GS_KT = 20         # a near-hovering helicopter's track is noise
 DEPARTURE_CLIMB_FPM = 300
 
 
@@ -110,6 +118,15 @@ class Pass:
     origin: str | None = None        # set by the enricher (enrich.py) on closed passes, carried on reopen
     destination: str | None = None
     route_source: str | None = None
+    military: int = 0                # readsb's database flag; ADSB_MILITARY_PATTERNS are applied on read
+    turn_deg: float = 0.0
+    last_track: float | None = None
+    max_dist_km: float | None = None
+
+    @property
+    def loitering(self) -> bool:
+        spread = (self.max_dist_km - self.min_dist_km) if self.max_dist_km is not None and self.min_dist_km is not None else None
+        return self.turn_deg >= LOITER_TURN_DEG and spread is not None and spread <= LOITER_SPREAD_KM
 
 
 _COLS = [f.name for f in fields(Pass) if f.name != "id"]
@@ -181,11 +198,20 @@ class Tracker:
             p.category = p.category or a["category"]
             p.max_rssi = _max(p.max_rssi, a["rssi_dbfs"])
             p.emergency = a["emergency"] or p.emergency
+            p.military = int(p.military or a.get("military", False))
+            trk, gs = a["track_deg"], a["ground_speed_kt"]
+            if not ground and trk is not None and gs is not None and gs >= TURN_MIN_GS_KT:
+                if p.last_track is not None:
+                    step = abs((trk - p.last_track + 540) % 360 - 180)
+                    if step >= TURN_MIN_STEP_DEG:
+                        p.turn_deg = round(p.turn_deg + step, 1)
+                p.last_track = trk
             if has_pos and not ground and alt is not None:
                 p.min_alt_ft = _min(p.min_alt_ft, alt)
                 p.max_alt_ft = _max(p.max_alt_ft, alt)
             if d_ref is not None:
                 p.min_dist_km = round(_min(p.min_dist_km, d_ref), 2)
+                p.max_dist_km = round(_max(p.max_dist_km, d_ref), 2)
             if in_zone:
                 p.last_in_zone = max(p.last_in_zone, t)
             if d_ap is not None:
@@ -217,7 +243,7 @@ class Tracker:
         if agl is None:
             return
         low = p.approach_low_agl_ft
-        if (low is not None and low <= GA_LOW_AGL and agl >= low + GA_CLIMB_FT and vr is not None
+        if (not p.loitering and low is not None and low <= GA_LOW_AGL and agl >= low + GA_CLIMB_FT and vr is not None
                 and vr >= GA_RATE_FPM and d_ap <= GA_KM and p.landed_at is None):
             p.go_arounds += 1
             p.approach_low_agl_ft = None   # re-arm: another approach is needed to count another go-around
@@ -233,7 +259,9 @@ class Tracker:
             grace = s.arrival_grace_s if (p.on_approach and p.landed_at is None) else s.pass_grace_s
             if now - p.last_seen > grace or now - p.last_in_zone > grace:
                 p.open = 0
-                p.outcome = self._outcome(p) if s.arrivals_enabled else None
+                if p.loitering and p.landed_at is None:
+                    p.go_arounds = 0       # climbs while working an area aren't go-arounds
+                p.outcome = self._outcome(p) if s.arrivals_enabled else ("loitering" if p.loitering else None)
                 del self.open[hx]
                 self._closed.append(p)
 
@@ -243,6 +271,8 @@ class Tracker:
             return "arrival"
         if p.on_approach:
             return "arrival_presumed"
+        if p.loitering:
+            return "loitering"
         if p.go_arounds:
             return "go_around"
         if p.departure:
