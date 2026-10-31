@@ -375,3 +375,20 @@ def test_live_tools_mark_military(settings, monkeypatch):
     got = {a["hex"]: (a["military"], a.get("military_basis"))
            for a in _call(Settings(), "aircraft_overhead", {"include_grounded": True})["aircraft"]}
     assert got == {"e847f9": (True, "pattern"), "ae68b5": (True, "readsb"), "e80001": (False, None)}
+
+
+def test_fast_aircraft_flypast_laps_are_loitering(settings):
+    # FAE-640 (B735) lapping over the city: wide (~10 km radius) circles at 250 kt.
+    tr = Tracker(settings, connect(settings.db_path))
+    laps = circle("e84805", 30, 1000, centre_km=20, radius_km=10, alts=(12000, 12600), flight="FAE640", typ="B735")
+    for sn in laps:
+        sn["aircraft"][0]["ground_speed_kt"] = 250.0
+    run(tr, *laps, snap(1000 + 15 * 30 + 200))
+    r = rows(settings)[0]
+    assert r["max_dist_km"] - r["min_dist_km"] > 15 and r["max_gs_kt"] == 250 and r["outcome"] == "loitering"
+
+
+def test_slow_aircraft_ranging_wide_is_not_loitering(settings):
+    tr = Tracker(settings, connect(settings.db_path))
+    run(tr, *circle("e80050", 30, 1000, centre_km=20, radius_km=10, alts=(14000, 14600)), snap(1000 + 15 * 30 + 200))
+    assert rows(settings)[0]["outcome"] != "loitering"            # 140 kt, > 15 km spread

@@ -46,6 +46,9 @@ and public). The star query: *"¿qué avión es ese?"*
   (Cotacachi) and departures as SEAS (Ascázubi). `ADSB_AIRPORT_ALIASES` maps such codes to the airport in
   `enrich.airport` / `airport_sql` (routes, usual_route, stats, board); results show `*_reported` with
   OpenSky's own code when it differs. Changing the alias list re-reads history — nothing to migrate.
+- **The OpenSky query spans the previous UTC day too** (`WINDOW_BEFORE_S`): 2 partitions still cost 30
+  credits. Measured: evening arrivals here land after 00:00 UTC but OpenSky files the flight under its
+  departure day, so a one-day query returned nothing (AAL833 MIA→UIO: `no_match` every night).
 - **Lookup state is explicit**: `route_lookup` = matched | no_match | pending, and `last_7_days` counts,
   so "OpenSky had nothing" never looks like "not asked yet".
 - **Receiver location is home-location PII.** `ADSB_SITE_LAT/LON` come from the environment (secret store at
@@ -112,7 +115,8 @@ and public). The star query: *"¿qué avión es ese?"*
 - **Loitering is detected from heading change, without storing a track.** A pass accumulates
   `turn_deg` (sum of track changes ≥ 2°, ignored below 20 kt where a hovering helicopter's track is noise)
   and ranges `min_dist_km`..`max_dist_km` from the reference — distances only, no coordinates (the
-  PII rule). ≥ 360° within 15 km → `loitering`, which also stops the go-around rule (measured: a Grob
+  PII rule). ≥ 360° within 15 km — 40 km if the pass reached ≥ 150 kt (`max_gs_kt`; a 737's flypast laps
+  over the city range far wider than a helicopter's) → `loitering`, which also stops the go-around rule (measured: a Grob
   G 120TP training session was recorded as 4 go-arounds; the test recreates the shape — 5 under the old rule).
 - **All five: four hints explicit**, **ok/refused/error** contract (receiver unreachable = error, never a
   silent empty list).

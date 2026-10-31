@@ -53,6 +53,7 @@ class FakeOpenSky:
         self.flights = flights or {}
         self.remaining = remaining
         self.calls: list[str] = []
+        self.windows: list[tuple[int, int]] = []
         self.tokens = 0
         self.reject_next_token = False
 
@@ -66,7 +67,8 @@ class FakeOpenSky:
             return httpx.Response(401)
         hx = req.url.params["icao24"]
         self.calls.append(hx)
-        assert int(req.url.params["end"]) - int(req.url.params["begin"]) < 86400   # one calendar day
+        self.windows.append((int(req.url.params["begin"]), int(req.url.params["end"])))
+        assert int(req.url.params["end"]) - int(req.url.params["begin"]) < 2 * 86400   # OpenSky's 2-day limit
         got = self.flights.get(hx, 404)
         headers = {"X-Rate-Limit-Remaining": self.remaining}
         if got == 429:
@@ -258,3 +260,12 @@ def test_lookup_states_are_distinct(settings):
     assert state == {"MATCH1": "matched", "NOPE1": "no_match", "LATER1": "pending"}
     week = _call(settings, "aircraft_history", {"query": "MATCH1"})["recorder"]["enrichment"]["last_7_days"]
     assert week == {"matched": 1, "no_match": 1, "pending": 1}
+
+
+def test_window_covers_the_previous_utc_day_for_evening_arrivals(settings):
+    # AAL833 MIA→UIO lands ~01:30 UTC; OpenSky files the flight under the day it departed (the day before).
+    add_pass(connect(settings.db_path), "a36661", "AAL833", DAY0 + 5400, DAY0 + 6000, "arrival_presumed")
+    fake = FakeOpenSky({"a36661": [flight("AAL833", "KMIA", "SEQM", DAY0 - 12000, DAY0 + 6300)]})
+    run(settings, fake)
+    assert fake.windows == [(DAY0 - 86400, DAY0 + 86399)]       # two partitions: still one 30-credit call
+    assert routes(settings) == [("AAL833", "KMIA", "SEQM", "opensky")]

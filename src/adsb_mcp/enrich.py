@@ -33,6 +33,10 @@ log = logging.getLogger("adsb_mcp.enrich")
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 API = "https://opensky-network.org/api"
 CALL_COST = 30               # a past-day /flights/* query (1–2 day partitions), per OpenSky's credit table
+# The query spans the PREVIOUS UTC day too (2 partitions — still 30 credits, within the 2-day limit). Measured:
+# evening arrivals in a UTC-5 country land after 00:00 UTC, but OpenSky files the flight under the day it
+# departed, so a one-day query never returned it (AAL833 MIA→UIO, every night: no_match).
+WINDOW_BEFORE_S = 86400
 READY_AFTER_S = 4 * 3600     # look day D up only after D+1 04:00 UTC: the nightly batch should be done
 LOOKBACK_DAYS = 7            # older un-enriched days are left alone
 EMPTY_RETRY_S = 6 * 3600     # an empty answer is retried after this...
@@ -167,7 +171,7 @@ async def enrich_once(settings: Settings, conn: sqlite3.Connection, client: Open
             summary["stopped"] = why
             break
         try:
-            r = await client.flights_for(hex_, int(start), int(start + 86399))
+            r = await client.flights_for(hex_, int(start - WINDOW_BEFORE_S), int(start + 86399))
         except OpenSkyError as e:
             summary["stopped"] = f"error: {e}"
             set_meta(conn, "opensky_last_status", summary["stopped"][:300])

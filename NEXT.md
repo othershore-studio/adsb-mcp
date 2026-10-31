@@ -48,6 +48,24 @@ aliases (SEHI / SEAS), and distinct lookup states. Still open:
   (ABX / LCO / LTG / GTI / LAE B763 / B744, a new flight number each trip) and GLG 16xx numbers. A
   per-callsign `usual_route` can never cover them.
 
+### The 27 Oct event, measured (2026-10-31)
+
+- **Loitering works**: ARPIA formations circled the city centre for ~2 h on 26 Oct (two H145s, `e847fe` +
+  FAE-1255, ~11,000° of turning each) and 27 Oct (`e847fe` + the G 120TP FAE1103 under the same callsign).
+  `e847fe` is a third unregistered FAE H145. New tactical callsigns: HIERRO09, HIERR16 (sic), HIERRO26.
+- **Missed**: FAE-640 (B735) flypast laps — 26 Oct a 2.4 h pass with 4,485° of turning came out
+  `overflight` (spread > 15 km at jet speed). Fixed: 40 km spread for passes that reached ≥ 150 kt.
+  Passes already closed keep their outcome.
+- **Departures fixed**: since the widened rule, departures (418) ≈ presumed arrivals (416); overflights fell
+  from ~30 % to ~21 %.
+- **OpenSky no-match ~48 %**: evening arrivals (after 00:00 UTC) were never matched — the flight is filed
+  under its departure day. Fixed: the query spans the previous UTC day (same 30 credits). Passes already
+  marked `no_match` are not re-queried; a one-off re-check of the last 7 days is possible but would cost
+  ~250 calls (~7,500 credits) — decide after a week of the new window.
+- **Credit cap hit** on 31 Oct (3,000/3,000, 227 pending): ~100 airframe-days a day × 30. OpenSky still
+  reported ~5,000 left, so the cap (ours) can rise — e.g. `ADSB_OPENSKY_DAILY_CREDITS=5000`.
+- 2 `go_around` passes on 30 Oct — not yet checked.
+
 ### Military / state aircraft and helicopters (2026-10-25)
 
 Seen 24–25 Oct, apparently practice for an event on **27 Oct** (expect more of it that day — a good

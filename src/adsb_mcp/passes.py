@@ -19,7 +19,9 @@ The heuristics are deliberately simple and documented here:
                     3,000 ft": the same daily departure, LNE1397, was a departure 3 days and an overflight 4 —
                     terrain hides the takeoff and the receiver first sees it ~20 km out, turning south.)
   * loitering     : circled — heading changed ≥ 360° in total (`LOITER_TURN_DEG`) while the pass ranged
-                    ≤ 15 km (`LOITER_SPREAD_KM`, from the distances to the reference: no coordinates kept).
+                    ≤ 15 km (`LOITER_SPREAD_KM`, from the distances to the reference: no coordinates kept),
+                    or ≤ 40 km for an aircraft that flew ≥ 150 kt (`LOITER_FAST_*`): a 737's flypast laps over
+                    the city (FAE-640, 26–27 Oct: up to 4,485° of turning) range far wider than a helicopter.
                     Patrols, training, survey flights. Once loitering, climbs and descents no longer count
                     as go-arounds (a Grob G 120TP's training session was recorded as 4 go-arounds).
 Outcome on close: arrival (landed seen) > arrival_presumed (lost on approach) > loitering > go_around (went
@@ -57,6 +59,8 @@ DEPARTURE_AGL = 5_000
 DEPARTURE_SAMPLES = 4       # snapshots at the start of a pass in which the departure rule may fire
 LOITER_TURN_DEG = 360
 LOITER_SPREAD_KM = 15
+LOITER_FAST_KT = 150        # at or above this ground speed (max seen in the pass) the wider spread applies
+LOITER_FAST_SPREAD_KM = 40
 TURN_MIN_STEP_DEG = 2       # heading jitter below this between snapshots isn't a turn
 TURN_MIN_GS_KT = 20         # a near-hovering helicopter's track is noise
 DEPARTURE_CLIMB_FPM = 300
@@ -122,11 +126,14 @@ class Pass:
     turn_deg: float = 0.0
     last_track: float | None = None
     max_dist_km: float | None = None
+    max_gs_kt: float | None = None
 
     @property
     def loitering(self) -> bool:
-        spread = (self.max_dist_km - self.min_dist_km) if self.max_dist_km is not None and self.min_dist_km is not None else None
-        return self.turn_deg >= LOITER_TURN_DEG and spread is not None and spread <= LOITER_SPREAD_KM
+        if self.turn_deg < LOITER_TURN_DEG or self.max_dist_km is None or self.min_dist_km is None:
+            return False
+        fast = self.max_gs_kt is not None and self.max_gs_kt >= LOITER_FAST_KT
+        return self.max_dist_km - self.min_dist_km <= (LOITER_FAST_SPREAD_KM if fast else LOITER_SPREAD_KM)
 
 
 _COLS = [f.name for f in fields(Pass) if f.name != "id"]
@@ -200,6 +207,8 @@ class Tracker:
             p.emergency = a["emergency"] or p.emergency
             p.military = int(p.military or a.get("military", False))
             trk, gs = a["track_deg"], a["ground_speed_kt"]
+            if not ground and gs is not None:
+                p.max_gs_kt = _max(p.max_gs_kt, round(gs))
             if not ground and trk is not None and gs is not None and gs >= TURN_MIN_GS_KT:
                 if p.last_track is not None:
                     step = abs((trk - p.last_track + 540) % 360 - 180)
