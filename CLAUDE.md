@@ -49,6 +49,15 @@ and public). The star query: *"¿qué avión es ese?"*
 - **The OpenSky query spans the previous UTC day too** (`WINDOW_BEFORE_S`): 2 partitions still cost 30
   credits. Measured: evening arrivals here land after 00:00 UTC but OpenSky files the flight under its
   departure day, so a one-day query returned nothing (AAL833 MIA→UIO: `no_match` every night).
+- **Matching tolerates a wide gap only for the same callsign.** Any OpenSky flight within 15 min of the
+  pass qualifies; one with the SAME callsign (same airframe, by construction) may be up to 3 h away —
+  measured: OpenSky first sees domestic departures 30+ min after takeoff, far from our receiver (LNE1397 /
+  HC-CTX `no_match` daily). Nearest leg wins, so a round trip under one callsign gets the right one.
+  `route_gap_s` keeps the gap (or the nearest flight's, on no_match) so this stays measurable.
+- **Outcomes are corrected on read, never rewritten**: an observed `overflight` whose (aliased) OpenSky
+  route began / ended at the airport reads as `departure` / `arrival_presumed` (`outcome_corrected`,
+  `outcome_basis`; `traffic_stats(group_by="outcome")` counts the corrected value). The stored `outcome` is
+  what the receiver saw.
 - **Lookup state is explicit**: `route_lookup` = matched | no_match | pending, and `last_7_days` counts,
   so "OpenSky had nothing" never looks like "not asked yet".
 - **Receiver location is home-location PII.** `ADSB_SITE_LAT/LON` come from the environment (secret store at

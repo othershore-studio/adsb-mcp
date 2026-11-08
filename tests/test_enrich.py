@@ -269,3 +269,53 @@ def test_window_covers_the_previous_utc_day_for_evening_arrivals(settings):
     run(settings, fake)
     assert fake.windows == [(DAY0 - 86400, DAY0 + 86399)]       # two partitions: still one 30-credit call
     assert routes(settings) == [("AAL833", "KMIA", "SEQM", "opensky")]
+
+
+def test_same_callsign_matches_across_a_wide_gap(settings):
+    # LNE1397: we see the first 5 minutes after takeoff; OpenSky first sees the flight ~45 min later.
+    add_pass(connect(settings.db_path), "e84071", "LNE1397", DAY0 + 50000, DAY0 + 50300, "departure")
+    fake = FakeOpenSky({"e84071": [flight("LNE1397", "SEQM", "SEGU", DAY0 + 53000, DAY0 + 54500),
+                                   flight("LNE1398", "SEGU", "SEQM", DAY0 + 58000, DAY0 + 61000)]})
+    run(settings, fake)
+    assert routes(settings) == [("LNE1397", "SEQM", "SEGU", "opensky")]
+    p = _call(settings, "aircraft_history", {"query": "LNE1397"})["passes"][0]
+    assert p["route_lookup"] == "matched" and p["route_gap_min"] == 45
+
+
+def test_round_trip_under_one_callsign_gets_the_nearest_leg(settings):
+    add_pass(connect(settings.db_path), "e84834", "FAE001", DAY0 + 70000, DAY0 + 70300)        # the return
+    fake = FakeOpenSky({"e84834": [flight("FAE001", "SEQM", "SEGU", DAY0 + 60000, DAY0 + 63000),
+                                   flight("FAE001", "SEGU", "SEQM", DAY0 + 67000, DAY0 + 69900)]})
+    run(settings, fake)
+    assert routes(settings)[0][1:3] == ("SEGU", "SEQM")
+
+
+def test_other_callsign_beyond_the_slack_is_no_match_with_the_gap_kept(settings):
+    add_pass(connect(settings.db_path), "e84072", "LNE1401", DAY0 + 50000, DAY0 + 50300)
+    fake = FakeOpenSky({"e84072": [flight("LNE1402", "SEGU", "SEQM", DAY0 + 53000, DAY0 + 54500)]})
+    run(settings, fake)
+    p = _call(settings, "aircraft_history", {"query": "LNE1401"})["passes"][0]
+    assert p["route_lookup"] == "no_match" and p["route_gap_min"] == 45
+
+
+def test_overflights_are_corrected_by_the_route_on_read(settings, monkeypatch):
+    monkeypatch.setenv("ADSB_AIRPORT_ALIASES", "SEHI,SEAS")
+    s = Settings()
+    conn = connect(s.db_path)
+    add_pass(conn, "a36636", "AAL833", DAY0 + 3600, DAY0 + 4000, "overflight")    # KMIA -> SEHI (= SEQM)
+    add_pass(conn, "e84071", "LNE1397", DAY0 + 7200, DAY0 + 7500, "overflight")   # SEAS (= SEQM) -> SEGU
+    add_pass(conn, "e84090", "LNE1440", DAY0 + 9000, DAY0 + 9300, "overflight")   # SEQM -> SEQM: left alone
+    add_pass(conn, "a12345", "UAL1004", DAY0 + 9000, DAY0 + 9300, "overflight")   # KIAH -> SPJC: left alone
+    fake = FakeOpenSky({"a36636": [flight("AAL833", "KMIA", "SEHI", DAY0, DAY0 + 4100)],
+                        "e84071": [flight("LNE1397", "SEAS", "SEGU", DAY0 + 7000, DAY0 + 9000)],
+                        "e84090": [flight("LNE1440", "SEQM", "SEQM", DAY0 + 8800, DAY0 + 12000)],
+                        "a12345": [flight("UAL1004", "KIAH", "SPJC", DAY0, DAY0 + 20000)]})
+    run(s, fake)
+    p = _call(s, "aircraft_history", {"query": "AAL833"})["passes"][0]
+    assert p["outcome"] == "overflight" and p["outcome_corrected"] == "arrival_presumed"
+    assert p["outcome_basis"] == "opensky route"
+    assert _call(s, "aircraft_history", {"query": "LNE1397"})["passes"][0]["outcome_corrected"] == "departure"
+    assert "outcome_corrected" not in _call(s, "aircraft_history", {"query": "LNE1440"})["passes"][0]
+    assert "outcome_corrected" not in _call(s, "aircraft_history", {"query": "UAL1004"})["passes"][0]
+    counts = {r["outcome"]: r["passes"] for r in _call(s, "traffic_stats", {"group_by": "outcome"})["rows"]}
+    assert counts == {"arrival_presumed": 1, "departure": 1, "overflight": 2}

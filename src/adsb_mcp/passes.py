@@ -127,6 +127,7 @@ class Pass:
     last_track: float | None = None
     max_dist_km: float | None = None
     max_gs_kt: float | None = None
+    route_gap_s: float | None = None  # set by the enricher
 
     @property
     def loitering(self) -> bool:

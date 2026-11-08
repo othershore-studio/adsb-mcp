@@ -73,8 +73,8 @@ _GROUP_SQL = {
                      "MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "category": ("category", "SELECT category, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                              "GROUP_CONCAT(DISTINCT type) AS types, MIN(first_seen) AS first, MAX(last_seen) AS last"),
-    "outcome": ("outcome", "SELECT outcome, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
-                           "MIN(first_seen) AS first, MAX(last_seen) AS last"),
+    "outcome": ("1", "SELECT {oc} AS outcome, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
+                     "MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "route": ("route", "SELECT COALESCE({o}, '?') || '-' || COALESCE({d}, '?') AS route, {o} AS origin, "
                        "{d} AS destination, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                        "GROUP_CONCAT(DISTINCT callsign) AS callsigns, MIN(first_seen) AS first, MAX(last_seen) AS last"),
@@ -139,6 +139,27 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
         terms = ["military = 1"] + [f"upper({c}) GLOB '{p}'" for p in settings.military_patterns
                                      for c in ("callsign", "reg")]
         return "(" + " OR ".join(terms) + ")"
+
+    icao = settings.airport_icao if settings.airport_icao and settings.airport_icao.isalnum() else None
+
+    def _corrected(outcome: str | None, origin: str | None, destination: str | None, matched: bool) -> str | None:
+        """An observed `overflight` that OpenSky's route says began or ended at the airport (aliases applied)
+        was really a departure / arrival the receiver didn't see the low part of. Observed outcome kept."""
+        if outcome != "overflight" or not matched or not icao or (origin == icao and destination == icao):
+            return outcome
+        if destination == icao:
+            return "arrival_presumed"
+        if origin == icao:
+            return "departure"
+        return outcome
+
+    def _corrected_sql() -> str:
+        if not icao:
+            return "outcome"
+        o, d, a = airport_sql("origin", settings), airport_sql("destination", settings), f"'{icao}'"
+        base = "outcome = 'overflight' AND route_source = 'opensky'"
+        return (f"(CASE WHEN {base} AND {d} = {a} AND ({o} IS NULL OR {o} <> {a}) THEN 'arrival_presumed' "
+                f"WHEN {base} AND {o} = {a} AND ({d} IS NULL OR {d} <> {a}) THEN 'departure' ELSE outcome END)")
 
     def _with_routes(acs: list[dict]) -> list[dict]:
         """Mark military / state aircraft, and add `usual_route` (learned from enriched past passes)."""
@@ -295,7 +316,17 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
                 "emergency": r["emergency"], "in_progress": bool(r["open"]),
                 "category": r["category"], "rotorcraft": r["category"] == ROTORCRAFT,
                 **_military(r["military"], r["callsign"], r["reg"]),
-                "turn_deg": round(r["turn_deg"] or 0), **_route_fields(r)}
+                "turn_deg": round(r["turn_deg"] or 0), **_route_fields(r),
+                **_outcome_fields(r)}
+
+    def _outcome_fields(r: sqlite3.Row) -> dict[str, Any]:
+        out: dict[str, Any] = {"route_gap_min": None if r["route_gap_s"] is None else round(r["route_gap_s"] / 60)}
+        fixed = _corrected(r["outcome"], airport(r["origin"], settings), airport(r["destination"], settings),
+                           r["route_source"] == "opensky")
+        if fixed != r["outcome"]:
+            out["outcome_corrected"] = fixed
+            out["outcome_basis"] = "opensky route"
+        return out
 
     def _route_fields(r: sqlite3.Row) -> dict[str, Any]:
         # Aliases applied for reading; OpenSky's own code kept alongside whenever it differs.
@@ -352,6 +383,8 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
                 key, select = _GROUP_SQL[group_by]
                 if group_by == "route":
                     select = select.format(o=airport_sql("origin", settings), d=airport_sql("destination", settings))
+                if group_by == "outcome":
+                    select = select.format(oc=_corrected_sql())
                 not_null = ("" if group_by == "outcome"
                             else " AND route_source = 'opensky' AND (origin IS NOT NULL OR destination IS NOT NULL)"
                             if group_by == "route" else f" AND {key} IS NOT NULL")
@@ -374,6 +407,9 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
             if group_by == "route" and not rows:
                 out["note"] = ("no routes yet: enrichment (ADSB_OPENSKY_CLIENT_ID/SECRET) fills them in the day "
                                "after a pass")
+            if group_by == "outcome" and settings.arrivals_enabled:
+                out["note"] = ("outcomes include corrections from OpenSky routes: an overflight whose route began / "
+                               "ended at the airport counts as departure / arrival_presumed")
             if group_by == "outcome" and not settings.arrivals_enabled:
                 out["note"] = "outcomes need ADSB_AIRPORT_LAT/LON + ADSB_AIRPORT_ELEV_FT; without them they are null."
             if not total["n"]:

@@ -42,6 +42,9 @@ LOOKBACK_DAYS = 7            # older un-enriched days are left alone
 EMPTY_RETRY_S = 6 * 3600     # an empty answer is retried after this...
 MAX_ATTEMPTS = 3             # ...this many times in total, then given up
 MATCH_SLACK_S = 900          # OpenSky's first/last seen vs ours: different receivers, different edges
+# ...but the SAME airframe flying the SAME callsign may sit further off: OpenSky often first sees a domestic
+# departure 30+ min after takeoff, far from our receiver (measured: LNE1397 / HC-CTX no_match every day).
+SAME_CALLSIGN_MAX_GAP_S = 3 * 3600
 ENRICH_EVERY_S = 3600
 
 
@@ -94,21 +97,28 @@ class OpenSky:
         return r
 
 
-def _match(p: sqlite3.Row, flights: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The OpenSky flight that best overlaps our pass in time (a same-callsign flight wins a tie)."""
-    best, best_score = None, 0.0
+def _match(p: sqlite3.Row, flights: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, float | None]:
+    """The OpenSky flight that is our pass, and the time gap to it (s; 0 = overlapping).
+
+    Any flight within `MATCH_SLACK_S` qualifies; a flight with the SAME callsign (it's the same airframe —
+    one lookup per airframe) may be up to `SAME_CALLSIGN_MAX_GAP_S` away. Preference: same callsign, then
+    the smallest gap, then the largest overlap — so a round trip flown under one callsign still gets the
+    right leg. With no match, the gap returned is the NEAREST flight's (None: OpenSky had no flights),
+    kept as `route_gap_s` so the matching can be measured, not guessed."""
+    best, best_key, best_gap, nearest = None, None, None, None
     for f in flights:
         fs, ls = f.get("firstSeen"), f.get("lastSeen")
         if fs is None or ls is None:
             continue
-        overlap = min(p["last_seen"], ls + MATCH_SLACK_S) - max(p["first_seen"], fs - MATCH_SLACK_S)
-        if overlap <= 0:
+        gap = max(0.0, fs - p["last_seen"], p["first_seen"] - ls)
+        nearest = gap if nearest is None else min(nearest, gap)
+        same = bool(p["callsign"]) and (f.get("callsign") or "").strip().upper() == p["callsign"].upper()
+        if gap > (SAME_CALLSIGN_MAX_GAP_S if same else MATCH_SLACK_S):
             continue
-        same = (f.get("callsign") or "").strip().upper() == (p["callsign"] or "").upper() and p["callsign"]
-        score = overlap + (1e6 if same else 0)
-        if score > best_score:
-            best, best_score = f, score
-    return best
+        key = (same, -gap, min(p["last_seen"], ls) - max(p["first_seen"], fs))
+        if best_key is None or key > best_key:
+            best, best_key, best_gap = f, key, gap
+    return best, (best_gap if best is not None else nearest)
 
 
 def _budget_left(conn: sqlite3.Connection, s: Settings, now: float) -> tuple[bool, str]:
@@ -135,13 +145,14 @@ def _settle(conn: sqlite3.Connection, hex_: str, day: str, flights: list[dict[st
                         "AND first_seen >= ? AND first_seen < ?", (hex_, start, start + 86400)).fetchall()
     matched = 0
     for p in rows:
-        f = _match(p, flights) if flights else None
+        f, gap = _match(p, flights) if flights else (None, None)
         if f:
             matched += 1
-            conn.execute("UPDATE passes SET origin = ?, destination = ?, route_source = 'opensky' WHERE id = ?",
-                         (f.get("estDepartureAirport"), f.get("estArrivalAirport"), p["id"]))
+            conn.execute("UPDATE passes SET origin = ?, destination = ?, route_source = 'opensky', route_gap_s = ? "
+                         "WHERE id = ?", (f.get("estDepartureAirport"), f.get("estArrivalAirport"), gap, p["id"]))
         else:
-            conn.execute("UPDATE passes SET route_source = 'opensky:none' WHERE id = ?", (p["id"],))
+            conn.execute("UPDATE passes SET route_source = 'opensky:none', route_gap_s = ? WHERE id = ?",
+                         (gap, p["id"]))
     return matched
 
 

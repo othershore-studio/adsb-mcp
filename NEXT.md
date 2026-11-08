@@ -48,6 +48,17 @@ aliases (SEHI / SEAS), and distinct lookup states. Still open:
   (ABX / LCO / LTG / GTI / LAE B763 / B744, a new flight number each trip) and GLG 16xx numbers. A
   per-callsign `usual_route` can never cover them.
 
+### Week of 1–7 Nov, measured (2026-11-07)
+
+1,301 passes / 322 airframes. The previous-day window works (AAL833 MIA→UIO now matched: usual route
+KMIA→SEQM 6/6). Departures 518 ≈ presumed arrivals 510. But OpenSky no_match stayed ~52 % (558 vs 525):
+domestic departures (LNE1397, the GLG shuttle HC-CTX) were no_match every day — OpenSky first sees them
+30+ min after takeoff, outside the 15-min slack. Fixed: same-callsign matches up to 3 h; `route_gap_min`
+now recorded on every lookup. Also fixed: overflights whose route began/ended at the airport (AAL833 on
+2 Nov) are corrected on read. **Next week: check no_match falls, and look at `route_gap_min` on what's
+left** (no flights at all vs. flights too far off). Seen: US Navy C-40A (CNV4174, BuNo 170041) in/out
+7 Nov; PAT085 (US Army King Air); AEE301; HIERRO19.
+
 ### The 27 Oct event, measured (2026-10-31)
 
 - **Loitering works**: ARPIA formations circled the city centre for ~2 h on 26 Oct (two H145s, `e847fe` +
