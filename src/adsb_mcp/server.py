@@ -34,7 +34,8 @@ overhead right now. History tools (when the server records): traffic_stats (most
 callsigns, types, outcomes, busiest hours over a window) and aircraft_history ("have we seen this one
 before?" — the past passes of an airframe / callsign / registration).
 
-Results are structured DATA (hex, callsign, registration, type, altitude_ft, ground_speed_kt, track_deg,
+Results are structured DATA (hex, callsign, registration, type, description (friendly model name, when the
+receiver's database has it), operator, year, altitude_ft, ground_speed_kt, track_deg,
 lat/lon, distance_km + bearing_deg from the reference point, seen_s). Answer in the user's language; cite
 that it's local ADS-B. Altitudes are feet, speed knots, track/bearing degrees.
 
@@ -65,11 +66,12 @@ APPROX_BEARING = 10
 
 # One SELECT per grouping (all GROUP BY the key; `first`/`last` are reshaped into local times).
 _GROUP_SQL = {
-    "airframe": ("hex", "SELECT hex, MAX(reg) AS registration, MAX(type) AS type, COUNT(*) AS passes, "
+    "airframe": ("hex", "SELECT hex, MAX(reg) AS registration, MAX(type) AS type, MAX(description) AS description, "
+                        "MAX(operator) AS operator, COUNT(*) AS passes, "
                         "GROUP_CONCAT(DISTINCT callsign) AS callsigns, MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "callsign": ("callsign", "SELECT callsign, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                              "GROUP_CONCAT(DISTINCT type) AS types, MIN(first_seen) AS first, MAX(last_seen) AS last"),
-    "type": ("type", "SELECT type, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
+    "type": ("type", "SELECT type, MAX(description) AS description, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                      "MIN(first_seen) AS first, MAX(last_seen) AS last"),
     "category": ("category", "SELECT category, COUNT(*) AS passes, COUNT(DISTINCT hex) AS airframes, "
                              "GROUP_CONCAT(DISTINCT type) AS types, MIN(first_seen) AS first, MAX(last_seen) AS last"),
@@ -306,6 +308,7 @@ def build_server(settings: Settings, snapshots: Snapshots | None = None) -> MCPS
 
     def _pass_row(r: sqlite3.Row) -> dict[str, Any]:
         return {"hex": r["hex"], "callsign": r["callsign"], "registration": r["reg"], "type": r["type"],
+                "description": r["description"], "operator": r["operator"], "year": r["year"],
                 "first_seen": _local(r["first_seen"]), "last_seen": _local(r["last_seen"]),
                 "duration_s": round(r["last_seen"] - r["first_seen"]),
                 "min_alt_ft": r["min_alt_ft"], "max_alt_ft": r["max_alt_ft"],

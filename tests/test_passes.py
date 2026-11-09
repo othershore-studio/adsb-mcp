@@ -392,3 +392,21 @@ def test_slow_aircraft_ranging_wide_is_not_loitering(settings):
     tr = Tracker(settings, connect(settings.db_path))
     run(tr, *circle("e80050", 30, 1000, centre_km=20, radius_km=10, alts=(14000, 14600)), snap(1000 + 15 * 30 + 200))
     assert rows(settings)[0]["outcome"] != "loitering"            # 140 kt, > 15 km spread
+
+
+def test_friendly_name_operator_and_year_from_the_feeder(settings, monkeypatch):
+    import time
+    t0 = time.time() - 3600
+    raw = {**ac("e80060", 10, 35000, flight="CMP152", reg="HP-1725CMP", typ="B738"),
+           "desc": "BOEING 737-800", "ownOp": "COPA AIRLINES", "year": "2012"}
+    tr = Tracker(settings, connect(settings.db_path))
+    run(tr, snap(t0, raw), snap(t0 + 15, {k: v for k, v in raw.items() if k not in ("desc", "ownOp", "year")}))
+    p = _call(settings, "aircraft_history", {"query": "CMP152"})["passes"][0]
+    assert (p["description"], p["operator"], p["year"]) == ("BOEING 737-800", "COPA AIRLINES", "2012")
+    assert _call(settings, "traffic_stats", {"group_by": "type"})["rows"][0]["description"] == "BOEING 737-800"
+    row = _call(settings, "traffic_stats", {"group_by": "airframe"})["rows"][0]
+    assert row["description"] == "BOEING 737-800" and row["operator"] == "COPA AIRLINES"
+    real = httpx.AsyncClient
+    monkeypatch.setattr(feeder_mod.httpx, "AsyncClient", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"now": 1, "aircraft": [raw]})), **kw))
+    assert _call(settings, "find_aircraft", {"query": "CMP"})["aircraft"][0]["description"] == "BOEING 737-800"

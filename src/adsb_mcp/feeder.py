@@ -54,6 +54,10 @@ def normalize(ac: dict[str, Any]) -> dict[str, Any]:
         "registration": ac.get("r"),
         "type": ac.get("t"),
         "category": ac.get("category"),
+        # From readsb's database with --db-file-lt: friendly model name, owner / operator, year built.
+        "description": ac.get("desc"),
+        "operator": ac.get("ownOp"),
+        "year": ac.get("year"),
         "altitude_ft": altitude,
         "on_ground": on_ground,
         "ground_speed_kt": _f(ac.get("gs")),

@@ -128,6 +128,9 @@ class Pass:
     max_dist_km: float | None = None
     max_gs_kt: float | None = None
     route_gap_s: float | None = None  # set by the enricher
+    description: str | None = None
+    operator: str | None = None
+    year: str | None = None
 
     @property
     def loitering(self) -> bool:
@@ -204,6 +207,9 @@ class Tracker:
             p.reg = p.reg or a["registration"]
             p.type = p.type or a["type"]
             p.category = p.category or a["category"]
+            p.description = p.description or a.get("description")
+            p.operator = p.operator or a.get("operator")
+            p.year = p.year or (str(a["year"]) if a.get("year") else None)
             p.max_rssi = _max(p.max_rssi, a["rssi_dbfs"])
             p.emergency = a["emergency"] or p.emergency
             p.military = int(p.military or a.get("military", False))

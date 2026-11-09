@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS passes (
     last_track          REAL,
     max_dist_km         REAL,              -- with min_dist_km: how far the pass ranged (no coordinates kept)
     max_gs_kt           REAL,              -- fastest ground speed seen (loiter spread depends on it)
-    route_gap_s         REAL               -- time to the matched OpenSky flight (or the nearest, if no match)
+    route_gap_s         REAL,              -- time to the matched OpenSky flight (or the nearest, if no match)
+    description         TEXT,              -- readsb's long type name, e.g. "BOEING 737-800"
+    operator            TEXT,              -- readsb's owner / operator
+    year                TEXT
 );
 CREATE INDEX IF NOT EXISTS passes_hex ON passes (hex, first_seen DESC);
 CREATE INDEX IF NOT EXISTS passes_callsign ON passes (callsign, first_seen DESC);
@@ -73,7 +76,7 @@ CREATE TABLE IF NOT EXISTS meta (
 MIGRATIONS = {"passes": [("origin", "TEXT"), ("destination", "TEXT"), ("route_source", "TEXT"),
                          ("military", "INTEGER NOT NULL DEFAULT 0"), ("turn_deg", "REAL NOT NULL DEFAULT 0"),
                          ("last_track", "REAL"), ("max_dist_km", "REAL"), ("max_gs_kt", "REAL"),
-                         ("route_gap_s", "REAL")]}
+                         ("route_gap_s", "REAL"), ("description", "TEXT"), ("operator", "TEXT"), ("year", "TEXT")]}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

@@ -150,6 +150,26 @@ To build (in this order; check against the 27 Oct data):
 
 ## Backlog
 
+- **METAR for the airport** (Daniel, 2026-11-08) — https://datamask.org/api-docs, reviewed 2026-11-08.
+  Open rather than earned: no key, limits unenforced ("please be reasonable"), but open only on good behaviour.
+  - `GET /api/v1/metar/{icao}` (raw + decoded, incl. QNH and flight category), `/taf/{icao}` (raw only),
+    `/health`. Tested once: SEQM works. Source is NOAA's tgftp feed; beta v1.
+  - **Conditions:** cite "NOAA NWS · Datamask Aviation" wherever shown (each response has an `attribution`
+    field); cache aggressively; email admin@datamask.org before production or high-volume use. Storing and
+    redistribution are **not stated** and there's no explicit licence: ask before accumulating METARs in
+    the store. "Not for flight planning or navigation."
+  - **Good-citizen shape:** one airport, a background job every 15–30 min (< 100 requests/day), tools and
+    the board read the cached value, so hints stay `openWorld=false` (a tool calling it live would be `true`).
+  - **Why it's worth it:** QNH corrects height above the field. ADS-B altitude is pressure altitude: Q1027
+    on the test call puts true altitude ~400 ft above it, the same size as the go-around and departure
+    margins in `passes.py`. Also: current weather on the board, and go-arounds / diversions vs. weather.
+  - **Where the credit goes** (Daniel): the board page, in its footer. The MCP tools produce data, not
+    cards, so tool results only need to carry the `attribution` field through.
+  - **Exact altitudes** (Daniel): QNH-corrected altitude minus a known elevation gives true height: above
+    the field (airport elevation, public) and above the receiver (site elevation, known to the operator).
+    A new `ADSB_SITE_ELEV_FT` would be secret-tier like `ADSB_SITE_LAT/LON`: elevation narrows down where
+    the site is, so env only, never echoed.
+
 - **Dedicated analytics tools** (if callers benefit — `traffic_stats` covers them today):
   `most_common_flights`, `seen_before`, `busiest_times`, `rarest_visitors`, `aircraft_stats`.
 - **Operator / owner** — OpenSky publishes an aircraft database as a downloadable file (hex → operator,

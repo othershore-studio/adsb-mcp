@@ -127,6 +127,9 @@ and public). The star query: *"¿qué avión es ese?"*
   PII rule). ≥ 360° within 15 km — 40 km if the pass reached ≥ 150 kt (`max_gs_kt`; a 737's flypast laps
   over the city range far wider than a helicopter's) → `loitering`, which also stops the go-around rule (measured: a Grob
   G 120TP training session was recorded as 4 go-arounds; the test recreates the shape — 5 under the old rule).
+- **Friendly names come from the feeder, not an outside API.** readsb's database (`--db-file-lt`) supplies
+  `desc` / `ownOp` / `year`; they're kept per pass and shown by the tools. `ownOp` can be a private owner's
+  name, so it stays off the open board.
 - **All five: four hints explicit**, **ok/refused/error** contract (receiver unreachable = error, never a
   silent empty list).
 
